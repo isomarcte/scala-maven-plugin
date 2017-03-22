@@ -283,6 +283,7 @@ public class ScalaScriptMojo extends ScalaMojoSupport {
             for(Plugin p : project.getBuildPlugins()) {
                 if ("scala-maven-plugin".equals(p.getArtifactId())) {
                     for(Dependency d : p.getDependencies()) {
+                        super.getLog().error(d.toString());
                         addToClasspath(factory.createDependencyArtifact(d), classpath, true);
                     }
                 }

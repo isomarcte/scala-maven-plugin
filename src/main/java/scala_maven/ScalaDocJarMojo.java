@@ -8,7 +8,9 @@ import java.util.Locale;
 import org.apache.maven.archiver.MavenArchiveConfiguration;
 import org.apache.maven.archiver.MavenArchiver;
 import org.apache.maven.artifact.DependencyResolutionRequiredException;
+import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Resource;
+import org.apache.maven.plugin.LegacySupport;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.project.MavenProjectHelper;
 import org.apache.maven.reporting.MavenReportException;
@@ -27,6 +29,16 @@ public class ScalaDocJarMojo extends ScalaDocMojo {
 
   private static final String[] DEFAULT_INCLUDES = new String[] { "**/**" };
   private static final String[] DEFAULT_EXCLUDES = new String[] {};
+
+  /**
+   * The {@link MavenArchiver} currently requires a {@link MavenSession}. This
+   * implies that it is stateful, which is not recommended, but that is not our
+   * problem.
+   * <p>
+   * The correct {@link MavenSession} is to inject {@link LegacySupport}.
+   */
+  private LegacySupport legacySupport;
+
   /**
    * The Jar archiver.
    *
@@ -35,11 +47,12 @@ public class ScalaDocJarMojo extends ScalaDocMojo {
   private JarArchiver jarArchiver;
 
   /**
-  * Used for attaching the artifact in the project.
-  *
-  * @component
-  */
+   * Used for attaching the artifact in the project.
+   *
+   * @component
+   */
   private MavenProjectHelper projectHelper;
+
   /**
    * Specifies the filename that will be used for the generated jar file. Please note that <code>-javadoc</code>
    * or <code>-test-javadoc</code> will be appended to the file name.
@@ -152,7 +165,9 @@ public class ScalaDocJarMojo extends ScalaDocMojo {
     if(javadocJar.exists()) {
       javadocJar.delete();
     }
-    MavenArchiver archiver = new MavenArchiver();
+    final MavenArchiver archiver =
+      new MavenArchiver();
+
     archiver.setArchiver( jarArchiver );
     archiver.setOutputFile( javadocJar );
     File contentDirectory = javadocFiles;
@@ -174,7 +189,9 @@ public class ScalaDocJarMojo extends ScalaDocMojo {
     try {
       // we don't want Maven stuff
       archive.setAddMavenDescriptor( false );
-      archiver.createArchive( project, archive );
+      archiver.createArchive(this.legacySupport.getSession(),
+                             project,
+                             archive);
     } catch ( ManifestException e ) {
       throw new ArchiverException( "ManifestException: " + e.getMessage(), e );
     } catch ( DependencyResolutionRequiredException e ) {
@@ -188,7 +205,7 @@ public class ScalaDocJarMojo extends ScalaDocMojo {
   }
 
   protected void failOnError(String prefix, Exception e)
-      throws MojoExecutionException {
+    throws MojoExecutionException {
     if (failOnError) {
       if (e instanceof RuntimeException) {
         throw (RuntimeException) e;

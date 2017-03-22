@@ -2,13 +2,12 @@ package scala_maven;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.ArtifactUtils;
-import org.apache.maven.artifact.factory.ArtifactFactory;
-import org.apache.maven.artifact.metadata.ArtifactMetadataSource;
 import org.apache.maven.artifact.repository.ArtifactRepository;
-import org.apache.maven.artifact.resolver.ArtifactCollector;
 import org.apache.maven.artifact.resolver.ArtifactNotFoundException;
 import org.apache.maven.artifact.resolver.ArtifactResolutionException;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
+import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
+import org.apache.maven.artifact.resolver.ArtifactResolver;
 import org.apache.maven.artifact.resolver.ArtifactResolver;
 import org.apache.maven.artifact.resolver.filter.AndArtifactFilter;
 import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
@@ -19,7 +18,7 @@ import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.MavenProjectBuilder;
+import org.apache.maven.project.ProjectBuilder;
 import org.apache.maven.project.ProjectBuildingException;
 import org.apache.maven.project.artifact.InvalidDependencyVersionException;
 import org.apache.maven.repository.RepositorySystem;
@@ -32,9 +31,9 @@ import org.apache.maven.shared.dependency.tree.traversal.CollectingDependencyNod
 import org.apache.maven.shared.dependency.tree.traversal.DependencyNodeVisitor;
 import org.apache.maven.shared.dependency.tree.traversal.FilteringDependencyNodeVisitor;
 import org.apache.maven.toolchain.ToolchainManager;
+
 import org.codehaus.plexus.util.StringUtils;
-import scala_maven_dependency.CheckScalaVersionVisitor;
-import scala_maven_dependency.ScalaDistroArtifactFilter;
+
 import scala_maven_executions.JavaMainCaller;
 import scala_maven_executions.JavaMainCallerByFork;
 import scala_maven_executions.JavaMainCallerInProcess;
@@ -45,13 +44,21 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Queue;
 import java.util.Set;
 
 public abstract class ScalaMojoSupport extends AbstractMojo {
 
     public static final String SCALA_LIBRARY_ARTIFACTID= "scala-library";
     public static final String SCALA_COMPILER_ARTIFACTID= "scala-compiler";
+
+    /**
+     * Constant {@link String} for "org.scala-lang". In this class it is used
+     * for the forked JLine group id.
+     */
+    protected static final String SCALA_ORG_GROUP = "org.scala-lang";
 
     /**
      * Constant {@link String} for "pom". Used to specify the Maven POM artifact
@@ -99,7 +106,7 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
      */
     protected RepositorySystem factory;
 
-    /**
+     /**
      * Used to look up Artifacts in the remote repository.
      *
      * @component
@@ -107,6 +114,7 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
      * @readonly
      */
     protected ArtifactResolver resolver;
+
     /**
      * Location of the local repository.
      *
@@ -324,7 +332,7 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
      * @required
      * @readonly
      */
-    protected MavenProjectBuilder mavenProjectBuilder;
+    protected ProjectBuilder projectBuilder;
 
     /**
      * The artifact repository to use.
@@ -334,33 +342,6 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
      * @readonly
      */
     private ArtifactRepository localRepository;
-
-    /**
-     * The artifact factory to use.
-     *
-     * @component
-     * @required
-     * @readonly
-     */
-    private ArtifactFactory artifactFactory;
-
-    /**
-     * The artifact metadata source to use.
-     *
-     * @component
-     * @required
-     * @readonly
-     */
-    private ArtifactMetadataSource artifactMetadataSource;
-
-    /**
-     * The artifact collector to use.
-     *
-     * @component
-     * @required
-     * @readonly
-     */
-    private ArtifactCollector artifactCollector;
 
     /**
      * The dependency tree builder to use.
@@ -398,19 +379,28 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
                                            ScalaMojoSupport.SCALA_COMPILER_ARTIFACTID,
                                            scalaVersion,
                                            "",
-                                           ScalaMojoSupport.POM);
+                                           ScalaMojoSupport.JAR);
+    }
+
+    protected final Artifact scalaLibraryArtifact(final String scalaVersion) {
+        return this.factory.createArtifact(this.getScalaOrganization(),
+                                           ScalaMojoSupport.SCALA_LIBRARY_ARTIFACTID,
+                                           scalaVersion,
+                                           "",
+                                           ScalaMojoSupport.JAR);
     }
 
     /**
-     * This method resolves all transitive dependencies of an artifact.
+     * This method resolves an {@link Artifact} returning the {@link
+     * ArtifactResolutionResult}.
      *
      * @param artifact the {@link Artifact} used to retrieve dependencies.
      *
-     * @return resolved {@link Set} of dependencies.
+     * @return resolved {@link ArtifactResolutionResult}.
      *
      * @throws {@link Exception} when various artifact resolution mechanisms fail.
      */
-    protected final Set<Artifact> resolveArtifactDependencies(final Artifact artifact) throws Exception {
+    protected final ArtifactResolutionResult resolveArtifact(final Artifact artifact) throws Exception {
         final AndArtifactFilter filter = new AndArtifactFilter();
         filter.add(new ScopeArtifactFilter(Artifact.SCOPE_TEST));
         filter.add(new ArtifactFilter(){
@@ -420,13 +410,14 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
             });
 
         // Use the collection filter as the resolution filter.
-        return resolveDependencyArtifacts(artifact,
-                                          filter,
-                                          filter);
+        return resolveArtifact(artifact,
+                               filter,
+                               filter);
     }
 
     /**
-     * This method resolves all transitive dependencies of an artifact.
+     * This method resolves an {@link Artifact} returning the {@link
+     * ArtifactResolutionResult}.
      *
      * @param artifact the {@link Artifact} used to retrieve dependencies.
      * @param collectionFilter an {@link ArtifactFilter} used to determine which
@@ -434,22 +425,23 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
      * @param collectionFilter an {@link ArtifactFilter} used to determine which
      *        members dependency graph should be downloaded.
      *
-     * @return resolved {@link Set} of dependencies.
+     * @return resolved {@link ArtifactResolutionResult}.
      *
      * @throws {@link Exception} when various artifact resolution mechanisms fail.
      */
-    protected final Set<Artifact> resolveDependencyArtifacts(final Artifact artifact,
+    protected final ArtifactResolutionResult resolveArtifact(final Artifact artifact,
                                                              final ArtifactFilter collectionFilter,
                                                              final ArtifactFilter resolutionFilter) throws Exception {
-        return this.resolveDependencyArtifacts(artifact,
-                                               collectionFilter,
-                                               resolutionFilter,
-                                               this.remoteRepos,
-                                               this.localRepo);
+        return this.resolveArtifact(artifact,
+                                    collectionFilter,
+                                    resolutionFilter,
+                                    this.remoteRepos,
+                                    this.localRepo);
     }
 
     /**
-     * This method resolves all transitive dependencies of an artifact.
+     * This method resolves an {@link Artifact} returning the {@link
+     * ArtifactResolutionResult}.
      *
      * @param artifact the {@link Artifact} used to retrieve dependencies.
      * @param collectionFilter an {@link ArtifactFilter} used to determine which
@@ -462,11 +454,11 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
      * @param localRepository the local {@link ArtifactRepository} to use for
      *        dependency resolution of the given {@link Artifact}.
      *
-     * @return resolved {@link Set} of dependencies.
+     * @return resolved {@link ArtifactResolutionResult}.
      *
      * @throws {@link Exception} when various artifact resolution mechanisms fail.
      */
-    protected final Set<Artifact> resolveDependencyArtifacts(final Artifact artifact,
+    protected final ArtifactResolutionResult resolveArtifact(final Artifact artifact,
                                                              final ArtifactFilter collectionFilter,
                                                              final ArtifactFilter resolutionFilter,
                                                              final List<ArtifactRepository> remoteRepositories,
@@ -478,8 +470,11 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
                                                  remoteRepositories,
                                                  localRepository);
 
+        super.getLog().debug("Artifact resolution result.");
+        super.getLog().debug(arr.toString());
+
         //TODO follow the dependenciesManagement and override rules
-        return this.resolver.resolve(arr).getArtifacts();
+        return this.resolver.resolve(arr);
     }
 
     /**
@@ -544,26 +539,108 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
       addToClasspath(factory.createDependencyArtifact(d), classpath, addDependencies);
     }
 
-    protected void addToClasspath(Artifact artifact, Set<String> classpath, boolean addDependencies) throws Exception {
-        resolver.resolve(artifact, remoteRepos, localRepo);
-        classpath.add(FileUtils.pathOf(artifact.getFile(), useCanonicalPath));
+    protected void addToClasspath(final Artifact artifact,
+                                  final Set<String> classpath,
+                                  final boolean addDependencies) throws Exception {
+        if (artifact.isResolved() == false) {
+            this.resolveArtifact(artifact);
+        }
+        final File artifactFile =
+            this.localRepo.find(artifact).getFile();
+        classpath.add(FileUtils.pathOf(artifactFile,
+                                       useCanonicalPath));
         if (addDependencies) {
-            for (Artifact dep : resolveArtifactDependencies(artifact)) {
-                addToClasspath(dep, classpath, addDependencies);
+            final Set<Artifact> dependencies =
+                this.resolveArtifact(artifact).getArtifacts();
+            for (final Artifact dep : dependencies) {
+                this.addToClasspath(dep, classpath, addDependencies);
             }
         }
     }
 
-    protected void addCompilerToClasspath(Set<String> classpath) throws Exception {
-      classpath.add(FileUtils.pathOf(getCompilerJar(), useCanonicalPath));
-      for (File dep : getCompilerDependencies()) {
-        classpath.add(FileUtils.pathOf(dep, useCanonicalPath));
-      }
+    protected final void addCompilerToClasspath(final Set<String> classpath) throws Exception {
+        this.addArtifactToClassPath(classpath,
+                                    this.scalaCompilerArtifact(this.findScalaVersion().toString()),
+                                    true);
     }
 
-    protected void addLibraryToClasspath(Set<String> classpath) throws Exception {
-      classpath.add(FileUtils.pathOf(getLibraryJar(), useCanonicalPath));
+    protected final void addLibraryToClasspath(final Set<String> classpath) throws Exception {
+        final Artifact scalaLibraryArtifact =
+            this.scalaLibraryArtifact(this.findScalaVersion().toString());
+
+        // False because that is what we were doing before...
+        this.addArtifactToClassPath(classpath,
+                                    scalaLibraryArtifact,
+                                    false);
     }
+
+    protected final void addArtifactToClassPath(final Set<String> classpath,
+                                                final Artifact artifact,
+                                                final boolean transitive) throws Exception {
+        // Needed to avoid cyclic resolution.
+        final Set<Artifact> resolved =
+            new HashSet<Artifact>();
+
+        final Queue<Artifact> unresolved =
+            new LinkedList<Artifact>();
+
+        unresolved.add(artifact);
+
+        // Oh what I wouldn't give for some tail calls right now...
+        while(unresolved.peek() != null) {
+            final Artifact a =
+                unresolved.poll();
+            final ArtifactResolutionResult arr =
+                this.resolveArtifact(a);
+
+            classpath.add(FileUtils.pathOf(this.localRepo.find(a).getFile(),
+                                           this.useCanonicalPath));
+            resolved.add(a);
+
+            if (transitive) {
+                final Set<Artifact> dependencies =
+                    arr.getArtifacts();
+                dependencies.removeAll(resolved);
+                unresolved.addAll(dependencies);
+            }
+        }
+    }
+
+    protected final File getLibraryJar() throws Exception {
+        return this.getArtifactJar(this.scalaLibraryArtifact(this.findScalaVersion().toString()));
+    }
+
+    protected final File getCompilerJar() throws Exception {
+        return this.getArtifactJar(this.scalaCompilerArtifact(this.findScalaVersion().toString()));
+    }
+
+    protected final List<File> getCompilerDependencies() throws Exception {
+        final Artifact sca =
+            this.scalaCompilerArtifact(this.findScalaVersion().toString());
+        final ArtifactResolutionResult arr =
+            this.resolveArtifact(sca);
+        final List<File> compilerDependnecies =
+            new LinkedList<File>();
+
+        for (final Artifact a : arr.getArtifacts()) {
+            if (a.equals(sca)) {
+                continue;
+            } else {
+                compilerDependnecies.add(this.getArtifactJar(a));
+            }
+        }
+
+        return compilerDependnecies;
+    }
+
+    protected final File getArtifactJar(final Artifact artifact) throws Exception {
+        if (artifact.isResolved() == false) {
+            this.resolveArtifact(artifact);
+        }
+
+        return this.localRepo.find(artifact).getFile();
+    }
+
 
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
@@ -592,10 +669,6 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
         } catch (Exception exc) {
             throw new MojoExecutionException("wrap: " + exc, exc);
         }
-    }
-
-    protected List<Dependency> getDependencies() {
-        return project.getCompileDependencies();
     }
 
     protected VersionNumber findScalaVersion() throws Exception {
@@ -637,27 +710,26 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
         return findVersionFromDependencies(getScalaOrganization(), SCALA_LIBRARY_ARTIFACTID);
     }
 
-    //TODO refactor to do only one scan of dependencies to find version
-    protected String findVersionFromDependencies(String groupId, String artifactId) throws Exception {
-        String version = null;
-        for (Dependency dep : getDependencies()) {
-            if (groupId.equals(dep.getGroupId()) && artifactId.equals(dep.getArtifactId())) {
-                version = dep.getVersion();
+    protected String findVersionFromDependencies(final String groupId,
+                                                 final String artifactId) {
+        return this.findVersionInArtifacts(this.project.getArtifacts(),
+                                           groupId,
+                                           artifactId);
+    }
+
+    protected final String findVersionInArtifacts(final Set<Artifact> artifacts,
+                                                  final String groupId,
+                                                  final String artifactId) {
+        for(final Artifact a : artifacts) {
+            if (a.getArtifactId().equals(artifactId) &&
+                a.getGroupId().equals(groupId)) {
+                return a.getVersion();
             }
         }
-        if (StringUtils.isEmpty(version)) {
-            List<Dependency> deps = new ArrayList<Dependency>();
-            deps.addAll(project.getModel().getDependencies());
-            if (project.getModel().getDependencyManagement() != null) {
-                deps.addAll(project.getModel().getDependencyManagement().getDependencies());
-            }
-            for (Dependency dep : deps) {
-                if (groupId.equals(dep.getGroupId()) && artifactId.equals(dep.getArtifactId())) {
-                    version = dep.getVersion();
-                }
-            }
-        }
-        return version;
+        return null; // I'm not happy about this, but we can't use Optional
+                     // until we build against JDK 1.8 and I don't think it is a
+                     // good use of time to re-implement Optional/Option/Maybe
+                     // etc.
     }
 
     protected void checkScalaVersion() throws Exception {
@@ -672,59 +744,42 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
 
     /** this method checks to see if there are multiple versions of the scala library
      * @throws Exception */
-    private void checkCorrectVersionsOfScalaLibrary(String scalaDefVersion) throws Exception {
-        getLog().debug("Checking for multiple versions of scala");
+    private void checkCorrectVersionsOfScalaLibrary(final String scalaDefVersion) throws Exception {
+        super.getLog().debug("Checking for multiple versions of scala");
+
+        boolean emitInitialLog = false;
+
         //TODO - Make sure we handle bad artifacts....
         // TODO: note that filter does not get applied due to MNG-3236
-        VersionNumber sv = new VersionNumber(scalaDefVersion);
-        VersionNumber requiredScalaVersion = StringUtils.isNotEmpty(scalaCompatVersion) ? new VersionNumberMask(scalaCompatVersion) : sv;
-        if (requiredScalaVersion.compareTo(sv) != 0) {
-          String msg = String.format("Scala library detected %s doesn't match scala.compat.version : %s", sv, requiredScalaVersion);
-          if(failOnMultipleScalaVersions) {
-            getLog().error(msg);
-            throw new MojoFailureException(msg);
-          }
-          getLog().warn(msg);
-        }
-        checkArtifactForScalaVersion(requiredScalaVersion, dependencyTreeBuilder.buildDependencyTree( project, localRepository, artifactFactory,
-                    artifactMetadataSource, null, artifactCollector ));
-    }
+        for (final Artifact a : this.project.getArtifacts()) {
+            final String dependencyScalaLibraryVersion =
+                this.getScalaLibraryVersionForArtifact(a);
 
-
-    /** Visits a node (and all dependencies) to see if it contains duplicate scala versions */
-    private void checkArtifactForScalaVersion(VersionNumber requiredScalaVersion, DependencyNode rootNode) throws Exception {
-        final CheckScalaVersionVisitor visitor = new CheckScalaVersionVisitor(requiredScalaVersion, getLog(), getScalaOrganization());
-
-        CollectingDependencyNodeVisitor collectingVisitor = new CollectingDependencyNodeVisitor();
-        DependencyNodeVisitor firstPassVisitor = new FilteringDependencyNodeVisitor( collectingVisitor, createScalaDistroDependencyFilter() );
-        rootNode.accept( firstPassVisitor );
-
-        DependencyNodeFilter secondPassFilter = new AncestorOrSelfDependencyNodeFilter( collectingVisitor.getNodes() );
-        DependencyNodeVisitor filteredVisitor = new FilteringDependencyNodeVisitor( visitor, secondPassFilter );
-
-        rootNode.accept( filteredVisitor );
-
-        if(visitor.isFailed()) {
-            visitor.logScalaDependents();
-            if(failOnMultipleScalaVersions) {
-                getLog().error("Multiple versions of scala libraries detected!");
-                throw new MojoFailureException("Multiple versions of scala libraries detected!");
+            // Version is `null` when the given `Artifact` does _not_ have
+            // dependency on `scala-library`.
+            if (dependencyScalaLibraryVersion == null ||
+                dependencyScalaLibraryVersion.equals(scalaDefVersion)) {
+                continue;
+            } else {
+                if (emitInitialLog == false) {
+                    super.getLog().warn(String.format("Expected all dependencies to require Scala version: %s",
+                                                      scalaDefVersion));
+                    emitInitialLog = true;
+                } else {/*Do Nothing*/}
+                super.getLog().warn(String.format("%s requires scala version: %s",
+                                                  a.toString(),
+                                                  dependencyScalaLibraryVersion));
             }
-            getLog().warn("Multiple versions of scala libraries detected!");
         }
     }
 
-    /**
-     * @return
-     *          A filter to only extract artifacts deployed from scala distributions
-     */
-    private DependencyNodeFilter createScalaDistroDependencyFilter() {
-        List<ArtifactFilter> filters = new ArrayList<ArtifactFilter>();
-        filters.add(new ScalaDistroArtifactFilter(getScalaOrganization()));
-        return new AndDependencyNodeFilter(filters);
+    private String getScalaLibraryVersionForArtifact(final Artifact a) throws Exception {
+        final Set<Artifact> dependencies =
+            this.resolveArtifact(a).getArtifacts();
+        return this.findVersionInArtifacts(dependencies,
+                                           SCALA_ORG_GROUP,
+                                           SCALA_LIBRARY_ARTIFACTID);
     }
-
-
 
     protected abstract void doExecute() throws Exception;
 
@@ -870,60 +925,30 @@ public abstract class ScalaMojoSupport extends AbstractMojo {
         return options;
     }
 
-    protected File getLibraryJar() throws Exception {
-      if (StringUtils.isNotEmpty(scalaHome)) {
-        File lib = new File(scalaHome, "lib");
-        return new File(lib, "scala-library.jar");
-      }
-      return getArtifactJar(getScalaOrganization(), SCALA_LIBRARY_ARTIFACTID, findScalaVersion().toString());
-    }
+    protected final Set<Artifact> getAllDependencies(final String groupId,
+                                                     final String artifactId,
+                                                     final String version) throws Exception {
+        final Set<Artifact> result =
+            new HashSet<Artifact>();
+        final Artifact pom =
+            factory.createArtifact(groupId,
+                                   artifactId,
+                                   version,
+                                   "",
+                                   ScalaMojoSupport.POM);
+        final Set<Artifact> d =
+            this.resolveArtifact(pom).getArtifacts();
 
-    protected File getCompilerJar() throws Exception {
-      if(StringUtils.isNotEmpty(scalaHome)) {
-        File lib = new File(scalaHome, "lib");
-        return new File(lib, "scala-compiler.jar");
-      }
-      return getArtifactJar(getScalaOrganization(), SCALA_COMPILER_ARTIFACTID, findScalaVersion().toString());
-    }
-
-    protected List<File> getCompilerDependencies() throws Exception {
-      List<File> d = new ArrayList<File>();
-      if(StringUtils.isEmpty(scalaHome)) {
-        for (Artifact artifact : getAllDependencies(getScalaOrganization(), SCALA_COMPILER_ARTIFACTID, findScalaVersion().toString())) {
-          d.add(artifact.getFile());
-        }
-      } else {
-        for(File f : new File(scalaHome, "lib").listFiles()) {
-          String name = f.getName();
-          if (name.endsWith(".jar") && !name.contains("scala-library") && !name.contains("scala-compiler")) {
-            d.add(f);
-          }
-        }
-      }
-      return d;
-    }
-
-    protected File getArtifactJar(String groupId, String artifactId, String version) throws Exception {
-        Artifact artifact = factory.createArtifact(groupId, artifactId, version, Artifact.SCOPE_RUNTIME, ScalaMojoSupport.JAR);
-        resolver.resolve(artifact, remoteRepos, localRepo);
-        return artifact.getFile();
-    }
-
-    protected File getArtifactJar(String groupId, String artifactId, String version, String classifier) throws Exception {
-        Artifact artifact = factory.createArtifactWithClassifier(groupId, artifactId, version, ScalaMojoSupport.JAR, classifier);
-        resolver.resolve(artifact, remoteRepos, localRepo);
-        return artifact.getFile();
-    }
-
-    protected Set<Artifact> getAllDependencies(String groupId, String artifactId, String version) throws Exception {
-        Set<Artifact> result = new HashSet<Artifact>();
-        Artifact pom = factory.createArtifact(groupId, artifactId, version, "", ScalaMojoSupport.POM);
-        Set<Artifact> d = resolveArtifactDependencies(pom);
         result.addAll(d);
-        for (Artifact dependency : d) {
-            Set<Artifact> transitive = getAllDependencies(dependency.getGroupId(), dependency.getArtifactId(), dependency.getVersion());
+
+        for (final Artifact dependency : d) {
+            final Set<Artifact> transitive =
+                getAllDependencies(dependency.getGroupId(),
+                                   dependency.getArtifactId(),
+                                   dependency.getVersion());
             result.addAll(transitive);
         }
+
         return result;
     }
 

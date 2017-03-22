@@ -64,11 +64,6 @@ public class ScalaTestCompileMojo extends ScalaCompilerSupport {
     }
 
     @Override
-    protected List<Dependency> getDependencies() {
-        return project.getTestDependencies();
-    }
-
-    @Override
     protected File getOutputDir() throws Exception {
         return testOutputDir.getAbsoluteFile();
     }

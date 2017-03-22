@@ -3,10 +3,11 @@ package scala_maven;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.reporting.MavenReport;
 import org.apache.maven.reporting.MavenReportException;
-import org.codehaus.doxia.sink.Sink;
 import org.codehaus.plexus.util.StringUtils;
 import scala_maven_executions.JavaMainCaller;
 import scala_maven_executions.MainHelper;
+
+import org.codehaus.doxia.sink.Sink;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -269,9 +270,6 @@ public class ScalaDocMojo extends ScalaSourceMojoSupport implements MavenReport 
 
     @Override
     public void doExecute() throws Exception {
-        // SiteRendererSink sink = siteRenderer.createSink(new
-        // File(project.getReporting().getOutputDirectory(), getOutputName() +
-        // ".html");
         generate(null, Locale.getDefault());
     }
 

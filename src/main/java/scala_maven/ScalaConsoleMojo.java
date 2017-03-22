@@ -33,12 +33,6 @@ public class ScalaConsoleMojo extends ScalaMojoSupport {
      */
     private static final String JLINE = "jline";
 
-    /**
-     * Constant {@link String} for "org.scala-lang". In this class it is used
-     * for the forked JLine group id.
-     */
-    private static final String SCALA_ORG_GROUP = "org.scala-lang";
-
     // Instance Members //
 
     /**
@@ -250,9 +244,8 @@ public class ScalaConsoleMojo extends ScalaMojoSupport {
         final Artifact compilerArtifact =
             super.scalaCompilerArtifact(scalaVersion.toString());
         final Set<Artifact> compilerDeps =
-            super.resolveArtifactDependencies(compilerArtifact);
+            super.resolveArtifact(compilerArtifact).getArtifacts();
         for (final Artifact a : compilerDeps) {
-            super.getLog().warn(a.toString());
             if (this.filterForJline(a)) {
                 return a;
             } else {
@@ -329,7 +322,7 @@ public class ScalaConsoleMojo extends ScalaMojoSupport {
         } else if (scala2_11_0.compareTo(scalaVersion) <= 0) {
             return super.factory.createArtifact(ScalaConsoleMojo.JLINE, ScalaConsoleMojo.JLINE, "2.12", "", ScalaMojoSupport.JAR);
         } else if (scala2_9_0.compareTo(scalaVersion) <= 0) {
-            return super.factory.createArtifact(ScalaConsoleMojo.SCALA_ORG_GROUP, ScalaConsoleMojo.JLINE, scalaVersion.toString(), "", ScalaMojoSupport.JAR);
+            return super.factory.createArtifact(ScalaMojoSupport.SCALA_ORG_GROUP, ScalaConsoleMojo.JLINE, scalaVersion.toString(), "", ScalaMojoSupport.JAR);
         } else {
             return super.factory.createArtifact(ScalaConsoleMojo.JLINE, ScalaConsoleMojo.JLINE, "0.9.94", "", ScalaMojoSupport.JAR);
         }

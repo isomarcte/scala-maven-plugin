@@ -59,12 +59,6 @@ public class ScalaCompileMojo extends ScalaCompilerSupport {
     }
 
     @Override
-    @Deprecated
-    protected List<Dependency> getDependencies() {
-        return project.getCompileDependencies();
-    }
-
-    @Override
     protected File getOutputDir() throws Exception {
         return outputDir.getAbsoluteFile();
     }
